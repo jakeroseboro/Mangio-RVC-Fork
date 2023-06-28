@@ -2,6 +2,9 @@
 
 FROM python:3.10-bullseye
 
+# Install system dependencies
+RUN apt-get update && apt-get install -y libsndfile1
+
 EXPOSE 7865
 
 WORKDIR /app
