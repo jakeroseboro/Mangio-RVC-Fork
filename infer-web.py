@@ -1,7 +1,6 @@
 import torch, os, traceback, sys, warnings, shutil, numpy as np
 
 os.environ["no_proxy"] = "localhost, 127.0.0.1, ::1"
-from multiprocessing import cpu_count
 import threading
 from time import sleep
 from subprocess import Popen
@@ -24,8 +23,8 @@ from i18n import I18nAuto
 import ffmpeg
 
 i18n = I18nAuto()
+i18n.print()
 # 判断是否有能用来训练和加速推理的N卡
-ncpu = cpu_count()
 ngpu = torch.cuda.device_count()
 gpu_infos = []
 mem = []
@@ -92,7 +91,7 @@ config = Config()
 logging.getLogger("numba").setLevel(logging.WARNING)
 
 
-class ToolButton(gr.Button, gr.components.FormComponent):
+class ToolButton(gr.Button, gr.components.IOComponent):
     """Small button with single emoji as text, fits inside gradio forms"""
 
     def __init__(self, **kwargs):
@@ -804,7 +803,8 @@ def train_index(exp_dir1, version19):
         index.add(big_npy[i : i + batch_size_add])
     faiss.write_index(
         index,
-        "%s/added_IVF%s_Flat_nprobe_%s.index" % (exp_dir, n_ivf, index_ivf.nprobe),
+        "%s/added_IVF%s_Flat_nprobe_%s_%s.index"
+        % (exp_dir, n_ivf, index_ivf.nprobe, version19),
     )
     infos.append(
         "成功构建索引，added_IVF%s_Flat_nprobe_%s_%s.index"
@@ -1071,15 +1071,13 @@ def change_info_(ckpt_path):
         return {"__type__": "update"}, {"__type__": "update"}, {"__type__": "update"}
 
 
-from infer_pack.models_onnx_moess import SynthesizerTrnMs256NSFsidM
-from infer_pack.models_onnx import SynthesizerTrnMs256NSFsidO
+from infer_pack.models_onnx import SynthesizerTrnMsNSFsidM
 
 
 def export_onnx(ModelPath, ExportedPath, MoeVS=True):
-    hidden_channels = 256  # hidden_channels，为768Vec做准备
     cpt = torch.load(ModelPath, map_location="cpu")
     cpt["config"][-3] = cpt["weight"]["emb_g.weight"].shape[0]  # n_spk
-    print(*cpt["config"])
+    hidden_channels = cpt["config"][-2]  # hidden_channels，为768Vec做准备
 
     test_phone = torch.rand(1, 200, hidden_channels)  # hidden unit
     test_phone_lengths = torch.tensor([200]).long()  # hidden unit 长度（貌似没啥用）
@@ -1090,68 +1088,39 @@ def export_onnx(ModelPath, ExportedPath, MoeVS=True):
 
     device = "cpu"  # 导出时设备（不影响使用模型）
 
-    if MoeVS:
-        net_g = SynthesizerTrnMs256NSFsidM(
-            *cpt["config"], is_half=False
-        )  # fp32导出（C++要支持fp16必须手动将内存重新排列所以暂时不用fp16）
-        net_g.load_state_dict(cpt["weight"], strict=False)
-        input_names = ["phone", "phone_lengths", "pitch", "pitchf", "ds", "rnd"]
-        output_names = [
-            "audio",
-        ]
-        torch.onnx.export(
-            net_g,
-            (
-                test_phone.to(device),
-                test_phone_lengths.to(device),
-                test_pitch.to(device),
-                test_pitchf.to(device),
-                test_ds.to(device),
-                test_rnd.to(device),
-            ),
-            ExportedPath,
-            dynamic_axes={
-                "phone": [1],
-                "pitch": [1],
-                "pitchf": [1],
-                "rnd": [2],
-            },
-            do_constant_folding=False,
-            opset_version=16,
-            verbose=False,
-            input_names=input_names,
-            output_names=output_names,
-        )
-    else:
-        net_g = SynthesizerTrnMs256NSFsidO(
-            *cpt["config"], is_half=False
-        )  # fp32导出（C++要支持fp16必须手动将内存重新排列所以暂时不用fp16）
-        net_g.load_state_dict(cpt["weight"], strict=False)
-        input_names = ["phone", "phone_lengths", "pitch", "pitchf", "ds"]
-        output_names = [
-            "audio",
-        ]
-        torch.onnx.export(
-            net_g,
-            (
-                test_phone.to(device),
-                test_phone_lengths.to(device),
-                test_pitch.to(device),
-                test_pitchf.to(device),
-                test_ds.to(device),
-            ),
-            ExportedPath,
-            dynamic_axes={
-                "phone": [1],
-                "pitch": [1],
-                "pitchf": [1],
-            },
-            do_constant_folding=False,
-            opset_version=16,
-            verbose=False,
-            input_names=input_names,
-            output_names=output_names,
-        )
+
+    net_g = SynthesizerTrnMsNSFsidM(
+        *cpt["config"], is_half=False
+    )  # fp32导出（C++要支持fp16必须手动将内存重新排列所以暂时不用fp16）
+    net_g.load_state_dict(cpt["weight"], strict=False)
+    input_names = ["phone", "phone_lengths", "pitch", "pitchf", "ds", "rnd"]
+    output_names = [
+        "audio",
+    ]
+    # net_g.construct_spkmixmap(n_speaker) 多角色混合轨道导出
+    torch.onnx.export(
+        net_g,
+        (
+            test_phone.to(device),
+            test_phone_lengths.to(device),
+            test_pitch.to(device),
+            test_pitchf.to(device),
+            test_ds.to(device),
+            test_rnd.to(device),
+        ),
+        ExportedPath,
+        dynamic_axes={
+            "phone": [1],
+            "pitch": [1],
+            "pitchf": [1],
+            "rnd": [2],
+        },
+        do_constant_folding=False,
+        opset_version=16,
+        verbose=False,
+        input_names=input_names,
+        output_names=output_names,
+    )
     return "Finished"
 
 
@@ -1344,7 +1313,7 @@ def print_page_details():
         print("    arg 4) feature index file path: logs/mi-test/added_IVF3042_Flat_nprobe_1.index")
         print("    arg 5) speaker id: 0")
         print("    arg 6) transposition: 0")
-        print("    arg 7) f0 method: harvest (pm, harvest, crepe, crepe-tiny)")
+        print("    arg 7) f0 method: harvest (pm, harvest, crepe, crepe-tiny, hybrid[x,x,x,x])")
         print("    arg 8) crepe hop length: 128")
         print("    arg 9) harvest median filter radius: 3 (0-7)")
         print("    arg 10) post resample rate: 0")
@@ -1744,10 +1713,10 @@ with gr.Blocks(theme=gr.themes.Soft()) as app:
                 )
                 np7 = gr.Slider(
                     minimum=0,
-                    maximum=ncpu,
+                    maximum=config.n_cpu,
                     step=1,
                     label=i18n("提取音高和处理数据使用的CPU进程数"),
-                    value=ncpu,
+                    value=config.n_cpu,
                     interactive=True,
                 )
             with gr.Group():  # 暂时单人的, 后面支持最多4人的#数据处理
@@ -1812,7 +1781,7 @@ with gr.Blocks(theme=gr.themes.Soft()) as app:
                 with gr.Row():
                     save_epoch10 = gr.Slider(
                         minimum=0,
-                        maximum=50,
+                        maximum=250,
                         step=1,
                         label=i18n("保存频率save_every_epoch"),
                         value=5,
@@ -2088,7 +2057,7 @@ with gr.Blocks(theme=gr.themes.Soft()) as app:
                     with open("docs/faq.md", "r", encoding="utf8") as f:
                         info = f.read()
                 else:
-                    with open("docs/faq_en.md", "r") as f:
+                    with open("docs/faq_en.md", "r", encoding="utf8") as f:
                         info = f.read()
                 gr.Markdown(value=info)
             except:

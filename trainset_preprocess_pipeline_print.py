@@ -40,7 +40,7 @@ class PreProcess:
         )
         self.sr = sr
         self.bh, self.ah = signal.butter(N=5, Wn=48, btype="high", fs=self.sr)
-        self.per = 3.7
+        self.per = 3.0
         self.overlap = 0.3
         self.tail = self.per + self.overlap
         self.max = 0.9
@@ -115,10 +115,10 @@ class PreProcess:
                     p = multiprocessing.Process(
                         target=self.pipeline_mp, args=(infos[i::n_p],)
                     )
-                    p.start()
                     ps.append(p)
-                for p in ps:
-                    p.join()
+                    p.start()
+                for i in range(n_p):
+                    ps[i].join()
         except:
             println("Fail. %s" % traceback.format_exc())
 
