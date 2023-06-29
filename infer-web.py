@@ -6,7 +6,6 @@ from time import sleep
 from subprocess import Popen
 import faiss
 from random import shuffle
-import io
 
 now_dir = os.getcwd()
 sys.path.append(now_dir)
@@ -156,12 +155,6 @@ def vc_single(
     global tgt_sr, net_g, vc, hubert_model, version
     if input_audio_path is None:
         return "You need to upload an audio", None
-    if hasattr(input_audio_path, "name"):
-        input_audio_path = input_audio_path.name
-        print("audio path input changed to %s", input_audio_path)
-    if hasattr(file_index, "name"):
-        file_index = file_index.name
-        print("file index changed to %s", file_index)
     f0_up_key = int(f0_up_key)
     try:
         audio = load_audio(input_audio_path, 16000)
@@ -416,63 +409,6 @@ def get_vc(sid):
     n_spk = cpt["config"][-3]
     return {"visible": True, "maximum": n_spk, "__type__": "update"}
 
-def get_vc_from_file_picker(file):
-    global n_spk, tgt_sr, net_g, vc, cpt, version
-    if file == "" or file == []:
-        global hubert_model
-        if hubert_model is not None:
-            print("clean_empty_cache")
-            del net_g, n_spk, vc, hubert_model, tgt_sr
-            hubert_model = net_g = n_spk = vc = hubert_model = tgt_sr = None
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-            if_f0 = cpt.get("f0", 1)
-            version = cpt.get("version", "v1")
-            if version == "v1":
-                if if_f0 == 1:
-                    net_g = SynthesizerTrnMs256NSFsid(
-                        *cpt["config"], is_half=config.is_half
-                    )
-                else:
-                    net_g = SynthesizerTrnMs256NSFsid_nono(*cpt["config"])
-            elif version == "v2":
-                if if_f0 == 1:
-                    net_g = SynthesizerTrnMs768NSFsid(
-                        *cpt["config"], is_half=config.is_half
-                    )
-                else:
-                    net_g = SynthesizerTrnMs768NSFsid_nono(*cpt["config"])
-            del net_g, cpt
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-            cpt = None
-        return {"visible": False, "__type__": "update"}
-    print("loading file %s" % file.name)
-    cpt = torch.load(file.name, map_location="cpu")
-    tgt_sr = cpt["config"][-1]
-    cpt["config"][-3] = cpt["weight"]["emb_g.weight"].shape[0]  # n_spk
-    if_f0 = cpt.get("f0", 1)
-    version = cpt.get("version", "v1")
-    if version == "v1":
-        if if_f0 == 1:
-            net_g = SynthesizerTrnMs256NSFsid(*cpt["config"], is_half=config.is_half)
-        else:
-            net_g = SynthesizerTrnMs256NSFsid_nono(*cpt["config"])
-    elif version == "v2":
-        if if_f0 == 1:
-            net_g = SynthesizerTrnMs768NSFsid(*cpt["config"], is_half=config.is_half)
-        else:
-            net_g = SynthesizerTrnMs768NSFsid_nono(*cpt["config"])
-    del net_g.enc_q
-    print(net_g.load_state_dict(cpt["weight"], strict=False))
-    net_g.eval().to(config.device)
-    if config.is_half:
-        net_g = net_g.half()
-    else:
-        net_g = net_g.float()
-    vc = VC(tgt_sr, config)
-    n_spk = cpt["config"][-3]
-    return {"visible": True, "maximum": n_spk, "__type__": "update"}
 
 def change_choices():
     names = []
@@ -1494,7 +1430,7 @@ with gr.Blocks(theme=gr.themes.Soft()) as app:
     with gr.Tabs():
         with gr.TabItem(i18n("模型推理")):
             with gr.Row():
-                sid0 = gr.File(label=i18n("推理音色"), file_types=[".pth"])
+                sid0 = gr.Dropdown(label=i18n("推理音色"), choices=sorted(names))
                 refresh_button = gr.Button(i18n("刷新音色列表和索引路径"), variant="primary")
                 clean_button = gr.Button(i18n("卸载音色省显存"), variant="primary")
                 spk_item = gr.Slider(
@@ -1508,7 +1444,7 @@ with gr.Blocks(theme=gr.themes.Soft()) as app:
                 )
                 clean_button.click(fn=clean, inputs=[], outputs=[sid0])
                 sid0.change(
-                    fn=get_vc_from_file_picker,
+                    fn=get_vc,
                     inputs=[sid0],
                     outputs=[spk_item],
                 )
@@ -1521,9 +1457,9 @@ with gr.Blocks(theme=gr.themes.Soft()) as app:
                         vc_transform0 = gr.Number(
                             label=i18n("变调(整数, 半音数量, 升八度12降八度-12)"), value=0
                         )
-                        input_audio0 = gr.File(
+                        input_audio0 = gr.Textbox(
                             label=i18n("输入待处理音频文件路径(默认是正确格式示例)"),
-                            file_types=[".wav, .mp3, .flac"],
+                            value="E:\\codes\\py39\\test-20230416b\\todo-songs\\冬之花clip1.wav",
                         )
                         f0method0 = gr.Radio(
                             label=i18n("选择音高提取算法,输入歌声可用pm提速,harvest低音好但巨慢无比"),
@@ -1548,9 +1484,10 @@ with gr.Blocks(theme=gr.themes.Soft()) as app:
                             interactive=True,
                         )
                     with gr.Column():
-                        file_index1 = gr.File(
+                        file_index1 = gr.Textbox(
                             label=i18n("特征检索库文件路径,为空则使用下拉的选择结果"),
-                            file_types=[".index"]
+                            value="",
+                            interactive=True,
                         )
                         file_index2 = gr.Dropdown(
                             label=i18n("自动检测index路径,下拉式选择(dropdown)"),
